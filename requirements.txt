@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+sqlmodel
+sqlalchemy
+pgvector
+sentence-transformers
+requests
+pymupdf
+pydantic
+python-multipart
