@@ -1,7 +1,7 @@
 """
 PDF Educational Content Extraction Pipeline
 ============================================
-- Uses Ollama (qwen3.5:397b-cloud) for TOC parsing & lesson boundary detection
+- Uses Ollama for TOC parsing & lesson boundary detection
 - Extracts hierarchy: class → publication → book → unit → lesson → paragraph
 - Chunks paragraphs at 300–400 tokens, semantically meaningful
 - Stores embeddings via SentenceTransformer
@@ -161,7 +161,7 @@ def parse_toc_with_llm(raw_toc_text: str) -> list[dict]:
       { "unit": "...", "lesson": "...", "section": "...", "page": int }
     """
     system = (
-        "You are a document structure parser. "
+        " You are a document structure parser. "
         "Given raw text from a table of contents, extract the hierarchy into JSON. "
         "Return ONLY a JSON array — no markdown, no commentary. "
         "Each element: {\"unit\": str, \"lesson\": str, \"section\": str, \"page\": int}. "
@@ -191,7 +191,7 @@ def detect_lesson_boundary(text: str, toc_entries: list[dict]) -> Optional[dict]
     ], ensure_ascii=False)
 
     system = (
-        "You are a document section detector. "
+        " You are a document section detector. "
         "Given a snippet of text and a TOC, decide if this text starts a new "
         "lesson or section from the TOC. "
         "Respond ONLY with JSON: {\"match\": true/false, \"lesson\": \"...\", \"section\": \"...\"}. "
@@ -488,3 +488,5 @@ async def extract_pdf(
 @app.get("/health")
 def health():
     return {"status": "ok", "model": OLLAMA_MODEL}
+from retrieval_flashcards import app as flashcard_app
+app.mount("/study", flashcard_app)
