@@ -4,17 +4,30 @@ import logging
 from typing import List
 from app.services.paragraph_service import hybrid_search
 from app.utils.llm import ollama_chat
+from app.utils.reranker import rerank as cross_rerank, mmr_diversify
 from app.schemas.flashcard import Flashcard, FlashcardResponse
+from app.utils.embed import get_embedding
 
 logger = logging.getLogger(__name__)
 
-def retrieve_paragraphs(query: str, top_k: int = 5) -> List[dict]:
+def retrieve_paragraphs(
+    query: str,
+    top_k: int = 5,
+    min_score: float = 0.0,
+    use_reranker: bool = True,
+    use_mmr: bool = True,
+    mmr_lambda: float = 0.7,
+) -> List[dict]:
     """
-    Retrieve paragraphs using semantic search
+    Retrieve paragraphs using hybrid search with re-ranking and diversity
     
     Args:
         query: Search query
         top_k: Number of paragraphs to retrieve
+        min_score: Minimum hybrid score threshold
+        use_reranker: Whether to apply cross-encoder re-ranking
+        use_mmr: Whether to apply MMR diversity
+        mmr_lambda: MMR diversity- relevance tradeoff (0 = diverse, 1 = relevant)
         
     Returns:
         List of paragraphs with content and metadata
@@ -22,14 +35,40 @@ def retrieve_paragraphs(query: str, top_k: int = 5) -> List[dict]:
     logger.info(f"Retrieving {top_k} paragraphs for query: {query}")
     
     try:
-        paragraphs = hybrid_search(query, top_k=top_k)
+        paragraphs = hybrid_search(query, top_k=top_k * 3, min_score=min_score, use_reranker=False)
         
-        result = []
+        candidates = []
         for para in paragraphs:
-            result.append({
+            candidates.append({
                 "id": para.id,
                 "content": para.content,
                 "metadata": para.meta,
+                "embedding": getattr(para, "_embedding_list", None),
+            })
+        
+        if not candidates:
+            return []
+        
+        if use_reranker:
+            candidates = cross_rerank(query, candidates, top_k=len(candidates))
+        
+        if use_mmr and candidates:
+            query_vector = get_embedding(query)
+            candidates = mmr_diversify(
+                candidates,
+                query_vector,
+                top_k=top_k,
+                lambda_param=mmr_lambda,
+            )
+        else:
+            candidates = candidates[:top_k]
+        
+        result = []
+        for c in candidates:
+            result.append({
+                "id": c["id"],
+                "content": c["content"],
+                "metadata": c["metadata"],
             })
         
         logger.info(f"Retrieved {len(result)} paragraphs")
@@ -133,7 +172,10 @@ def generate_flashcards(
     query: str,
     top_k: int = 5,
     num_flashcards: int = 5,
-    difficulty_level: str = "mixed"
+    difficulty_level: str = "mixed",
+    min_score: float = 0.0,
+    use_reranker: bool = True,
+    use_mmr: bool = True,
 ) -> FlashcardResponse:
     """
     Complete pipeline: retrieve paragraphs + generate flashcards
@@ -143,6 +185,9 @@ def generate_flashcards(
         top_k: Number of paragraphs to retrieve
         num_flashcards: Number of flashcards to generate
         difficulty_level: Difficulty level for flashcards
+        min_score: Minimum hybrid score threshold
+        use_reranker: Whether to apply cross-encoder re-ranking
+        use_mmr: Whether to apply MMR diversity
         
     Returns:
         FlashcardResponse with flashcards and metadata
@@ -150,7 +195,13 @@ def generate_flashcards(
     logger.info(f"Generating flashcards for query: {query}")
     
     # Step 1: Retrieve paragraphs
-    paragraphs = retrieve_paragraphs(query, top_k=top_k)
+    paragraphs = retrieve_paragraphs(
+        query,
+        top_k=top_k,
+        min_score=min_score,
+        use_reranker=use_reranker,
+        use_mmr=use_mmr,
+    )
     
     # Step 2: Generate flashcards
     flashcards = generate_flashcards_from_paragraphs(
