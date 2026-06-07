@@ -3,8 +3,10 @@ from sqlmodel import Session
 from app.core.database import get_session
 from app.models.paragraph import Paragraph
 from app.schemas.question import GenerateQuestionsRequest, GenerateQuestionsResponse, QuestionResponse
-from app.services.question_service import generate_questions_from_paragraph
-from app.services.paragraph_service import hybrid_search
+from app.services.question_service import (
+    generate_questions_from_paragraph,
+    search_and_generate_questions as svc_search_and_generate,
+)
 
 router = APIRouter()
 
@@ -31,18 +33,19 @@ def search_and_generate_questions(
     query: str = Query(..., min_length=1, max_length=500), 
     num_questions: int = Query(3, ge=1, le=10),
     top_k: int = Query(2, ge=1, le=5),
-    alpha: float = Query(0.5, ge=0.0, le=1.0)
+    alpha: float = Query(0.5, ge=0.0, le=1.0),
+    min_score: float = Query(0.0, ge=0.0, le=1.0),
+    use_reranker: bool = Query(True),
+    use_mmr: bool = Query(True),
 ):
-    # Retrieve top K paragraphs using hybrid search (Semantic + FTS)
-    paragraphs = hybrid_search(query=query, top_k=top_k, alpha=alpha)
-    
-    if not paragraphs:
-        return GenerateQuestionsResponse(questions=[])
-        
-    # Concatenate the text of the retrieved paragraphs to form a larger context window
-    combined_content = "\n\n".join([p.content for p in paragraphs])
-    
-    questions_data = generate_questions_from_paragraph(combined_content, num_questions)
+    questions_data = svc_search_and_generate(
+        query=query,
+        num_questions=num_questions,
+        top_k=top_k,
+        min_score=min_score,
+        use_reranker=use_reranker,
+        use_mmr=use_mmr,
+    )
     
     questions = [QuestionResponse(**q) for q in questions_data if isinstance(q, dict) and 'question' in q and 'answer' in q]
     
