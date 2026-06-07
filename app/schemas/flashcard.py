@@ -7,6 +7,9 @@ class FlashcardRequest(BaseModel):
     top_k: int = 5  # Number of paragraphs to retrieve
     num_flashcards: int = 5  # Number of flashcards to generate
     difficulty: Optional[str] = None  # e.g., "easy", "medium", "hard" (optional filter)
+    min_score: Optional[float] = None  # Minimum relevance score threshold
+    use_reranker: Optional[bool] = None  # Whether to use cross-encoder re-ranking
+    use_mmr: Optional[bool] = None  # Whether to apply MMR diversity
 
 class Flashcard(BaseModel):
     """Single flashcard wcith question and answer"""
