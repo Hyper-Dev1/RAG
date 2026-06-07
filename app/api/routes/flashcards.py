@@ -63,12 +63,19 @@ async def generate_flashcards_endpoint(request: FlashcardRequest):
     ```
     """
     try:
-        result = generate_flashcards(
+        kwargs = dict(
             query=request.query,
             top_k=request.top_k,
             num_flashcards=request.num_flashcards,
-            difficulty_level=request.difficulty or "mixed"
+            difficulty_level=request.difficulty or "mixed",
         )
+        if request.min_score is not None:
+            kwargs["min_score"] = request.min_score
+        if request.use_reranker is not None:
+            kwargs["use_reranker"] = request.use_reranker
+        if request.use_mmr is not None:
+            kwargs["use_mmr"] = request.use_mmr
+        result = generate_flashcards(**kwargs)
         return result
     except ValueError as e:
         logger.error(f"Validation error: {e}")
