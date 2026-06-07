@@ -32,6 +32,8 @@ FastAPI app. Entrypoint: `app/main.py` → includes router at `app/api/router.py
 - `POST /api/v1/questions/search_and_generate` — query + num_questions + top_k + alpha
 - `GET /api/v1/paragraphs/search` — hybrid search (semantic + FTS), returns paragraphs with score
 - `POST /api/v1/documents/extract` — upload PDF, extract/chunk/embed + store in DB
+- `POST /api/v1/flashcards/generate` — query + top_k + num_flashcards + difficulty
+- `POST /api/v1/flashcards/retrieve` — retrieve paragraphs for a query
 
 ## Key facts
 
