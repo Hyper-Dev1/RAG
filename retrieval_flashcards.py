@@ -18,6 +18,9 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 from sqlalchemy import text
 import json, re, logging, os, requests
+from typing import Optional
+
+from app.utils.reranker import rerank as cross_rerank, mmr_diversify
 
 # ── Re-use the same engine, models, embedder, and ollama_chat from your pipeline
 # In production: move shared code to a shared module (e.g. db.py, models.py)
@@ -48,7 +51,10 @@ app = FastAPI(title="Flashcard Study App")
 #  RETRIEVAL HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def retrieve_by_lesson(lesson_id: int) -> list[dict]:
+def retrieve_by_lesson(
+    lesson_id: int,
+    use_reranker: bool = True,
+) -> list[dict]:
     """
     Return all paragraphs that belong to a lesson.
 
@@ -72,13 +78,25 @@ def retrieve_by_lesson(lesson_id: int) -> list[dict]:
             select(Paragraph).where(Paragraph.section_id.in_(section_ids))
         ).all()
 
-        return [
+        chunks = [
             {"id": p.id, "content": p.content, "metadata": p.meta}
             for p in paragraphs
         ]
 
+    if not chunks:
+        return []
 
-def retrieve_by_semantic_search(query: str, top_k: int = 8) -> list[dict]:
+    return chunks
+
+
+def retrieve_by_semantic_search(
+    query: str,
+    top_k: int = 8,
+    min_similarity: float = 0.4,
+    use_reranker: bool = True,
+    use_mmr: bool = True,
+    mmr_lambda: float = 0.7,
+) -> list[dict]:
     """
     Embed the query and find the most similar paragraphs using
     cosine similarity on the pgvector index.
@@ -100,29 +118,63 @@ def retrieve_by_semantic_search(query: str, top_k: int = 8) -> list[dict]:
     # Build the vector as a PostgreSQL literal string  e.g. "[0.1, 0.2, ...]"
     vector_literal = "[" + ",".join(str(x) for x in query_vector) + "]"
 
+    # Fetch extra candidates to give re-ranking and MMR room to work
+    fetch_k = max(top_k * 4, 20)
+
     sql = text(f"""
         SELECT
             id,
             content,
             metadata,
+            embedding::text AS embedding_str,
             1 - (embedding <=> '{vector_literal}'::vector) AS similarity
         FROM paragraph
+        WHERE 1 - (embedding <=> '{vector_literal}'::vector) >= :min_sim
         ORDER BY embedding <=> '{vector_literal}'::vector
-        LIMIT :top_k
+        LIMIT :fetch_k
     """)
 
     with engine.connect() as conn:
-        rows = conn.execute(sql, {"top_k": top_k}).fetchall()
+        rows = conn.execute(sql, {"min_sim": min_similarity, "fetch_k": fetch_k}).fetchall()
 
-    return [
-        {
+    candidates = []
+    for row in rows:
+        emb = None
+        if row.embedding_str:
+            try:
+                emb = [float(x) for x in row.embedding_str.strip("[]").split(",")]
+            except Exception:
+                pass
+        candidates.append({
             "id":         row.id,
             "content":    row.content,
             "metadata":   row.metadata,
             "similarity": round(float(row.similarity), 4),
-        }
-        for row in rows
-    ]
+            "embedding":  emb,
+        })
+
+    if not candidates:
+        return []
+
+    if use_reranker:
+        candidates = cross_rerank(query, candidates, top_k=fetch_k)
+
+    if use_mmr and candidates:
+        candidates = mmr_diversify(
+            candidates,
+            query_vector,
+            top_k=top_k,
+            lambda_param=mmr_lambda,
+        )
+    else:
+        candidates = candidates[:top_k]
+
+    # Clean up internal fields before returning
+    for c in candidates:
+        c.pop("embedding", None)
+        c.pop("rerank_score", None)
+
+    return candidates
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -318,6 +370,9 @@ def lesson_flashcards(lesson_id: int):
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 8
+    min_similarity: Optional[float] = None
+    use_reranker: Optional[bool] = None
+    use_mmr: Optional[bool] = None
 
 @app.post("/search")
 def semantic_search(req: SearchRequest):
@@ -327,7 +382,14 @@ def semantic_search(req: SearchRequest):
 
     Usage: POST /search  body: {"query": "how do plants make food", "top_k": 5}
     """
-    results = retrieve_by_semantic_search(req.query, top_k=req.top_k)
+    kwargs = {"query": req.query, "top_k": req.top_k}
+    if req.min_similarity is not None:
+        kwargs["min_similarity"] = req.min_similarity
+    if req.use_reranker is not None:
+        kwargs["use_reranker"] = req.use_reranker
+    if req.use_mmr is not None:
+        kwargs["use_mmr"] = req.use_mmr
+    results = retrieve_by_semantic_search(**kwargs)
     return {"query": req.query, "results": results}
 
 
@@ -344,7 +406,14 @@ def search_flashcards(req: SearchRequest):
 
     Usage: POST /search/cards  body: {"query": "photosynthesis", "top_k": 6}
     """
-    chunks = retrieve_by_semantic_search(req.query, top_k=req.top_k)
+    kwargs = {"query": req.query, "top_k": req.top_k}
+    if req.min_similarity is not None:
+        kwargs["min_similarity"] = req.min_similarity
+    if req.use_reranker is not None:
+        kwargs["use_reranker"] = req.use_reranker
+    if req.use_mmr is not None:
+        kwargs["use_mmr"] = req.use_mmr
+    chunks = retrieve_by_semantic_search(**kwargs)
     if not chunks:
         raise HTTPException(status_code=404, detail="No relevant content found")
 
