@@ -44,6 +44,7 @@ def retrieve_paragraphs(
                 "content": para.content,
                 "metadata": para.meta,
                 "embedding": getattr(para, "_embedding_list", None),
+                "_score": getattr(para, "_score", 0),
             })
         
         if not candidates:
@@ -69,6 +70,7 @@ def retrieve_paragraphs(
                 "id": c["id"],
                 "content": c["content"],
                 "metadata": c["metadata"],
+                "score": c.get("rerank_score", c.get("_score", 0)),
             })
         
         logger.info(f"Retrieved {len(result)} paragraphs")
@@ -202,7 +204,17 @@ def generate_flashcards(
         use_reranker=use_reranker,
         use_mmr=use_mmr,
     )
-    
+
+    min_relevance_score = 0.35
+    top_score = max(p["score"] for p in paragraphs) if paragraphs else 0
+    if not paragraphs or top_score < min_relevance_score:
+        return FlashcardResponse(
+            query=query,
+            flashcards=[],
+            source_paragraphs=0,
+            message="This topic is not covered in your current textbook (Class 8). Try a topic from your syllabus."
+        )
+
     # Step 2: Generate flashcards
     flashcards = generate_flashcards_from_paragraphs(
         paragraphs,
