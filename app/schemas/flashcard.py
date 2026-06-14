@@ -23,6 +23,7 @@ class FlashcardResponse(BaseModel):
     query: str
     flashcards: List[Flashcard]
     source_paragraphs: int  # How many paragraphs were used
+    message: Optional[str] = None
 
 class RetrievalResponse(BaseModel):
     """Raw retrieval response (before flashcard generation)"""
